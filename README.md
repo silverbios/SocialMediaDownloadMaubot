@@ -7,6 +7,7 @@ Currently supported social media platforms:
   - Instagram (Might not work anymore because Instagram has massively restricted anonymous access.)
   - YouTube
   - TikTok
+  - Aparat
 
 Choose what to download by configuring the plugin.
 
