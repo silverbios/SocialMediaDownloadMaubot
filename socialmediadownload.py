@@ -19,7 +19,7 @@ from maubot.handlers import event
 
 class Config(BaseProxyConfig):
     def do_update(self, helper: ConfigUpdateHelper) -> None:
-        for prefix in ["reddit", "instagram", "youtube", "tiktok"]:
+        for prefix in ["reddit", "instagram", "youtube", "tiktok", "aparat"]:
             for suffix in ["enabled", "info", "image", "video", "thumbnail"]:
                 helper.copy(f"{prefix}.{suffix}")
 
@@ -30,6 +30,7 @@ instagram_pattern = re.compile(r"(?:https?:\/\/)?(?:www\.)?instagram\.com\/?([a-
 youtube_pattern = re.compile(r"((?:https?:)?\/\/)?((?:www|m)\.)?((?:youtube\.com|youtu\.be))(\/(?:[\w\-]+\?v=|embed\/|v\/)?)([\w\-]+)(\S+)?")
 tiktok_pattern = re.compile(r"((?:https?:)?\/\/)?((?:www|m|vm)\.)?((?:tiktok\.com))(\/[@a-zA-Z0-9\-\_\.]+)?(\/video\/)?([a-zA-Z0-9\-\_]+)?")
 bluesky_pattern = re.compile(r"((?:https?:)?\/\/)?((?:www|bsky)\.)?((?:bsky\.app))(\/profile\/[a-zA-Z0-9\-\_\.]+)(\/post\/[a-zA-Z0-9\-\_]+)")
+aparat_pattern = re.compile(r"((?:https?:)?\/\/)?((?:www\.)?aparat\.(?:com|ir))\/(?:v=|v\/)([\w\-]+)")
 
 class SocialMediaDownloadPlugin(Plugin):
     async def start(self) -> None:
@@ -71,6 +72,11 @@ class SocialMediaDownloadPlugin(Plugin):
             for url_tup in bluesky_pattern.findall(evt.content.body):
                 await evt.mark_read()
                 await self.handle_bluesky(evt, url_tup)
+                
+        for url_tup in aparat_pattern.findall(evt.content.body):
+            await evt.mark_read()
+            if self.config["aparat.enabled"]:
+                await self.handle_aparat(evt, url_tup)
 
     async def get_ttdownloader_params(self, tokensDict, url) -> list:
         cookies = {
@@ -436,3 +442,89 @@ class SocialMediaDownloadPlugin(Plugin):
 
         self.log.info("All segments downloaded.")
         return b"".join(segment_data)
+
+    async def get_aparat_video_id(self, url):
+        match = aparat_pattern.findall(url)
+        if match:
+            return match[0][2]
+        else:
+            self.log.warning(f"Failed to extract video ID from URL: {url}")
+            return None
+
+    async def generate_aparat_query_url(self, video_id):
+        if not video_id:
+            self.log.warning("No video ID found, cannot generate query URL.")
+            return None
+        query_url = f"https://www.aparat.com/etc/api/video/videohash/{video_id}"
+        return query_url
+
+    async def handle_aparat(self, evt, url_tup):
+        video_id = url_tup[2]  # Directly extract the video ID from the regex groups
+        query_url = await self.generate_aparat_query_url(video_id)
+
+        response = await self.http.get(query_url)
+        if response.status != 200:
+            self.log.warning(f"Unexpected status fetching video data: {query_url}: {response.status}")
+            return
+
+        response_text = await response.read()
+        data = json.loads(response_text.decode())
+
+        if self.config["aparat.info"]:
+            title = data['video']['title']
+            await evt.reply(title)
+
+        if self.config["aparat.thumbnail"]:
+            thumbnail_url = data['video']['big_poster']  # Higher quality thumbnail
+            response = await self.http.get(thumbnail_url)
+            if response.status != 200:
+                self.log.warning(f"Unexpected status fetching image {thumbnail_url}: {response.status}")
+                return
+            thumbnail = await response.read()
+            filename = f"{video_id}.jpg"
+            uri = await self.client.upload_media(thumbnail, mime_type='image/jpeg', filename=filename)
+            await self.client.send_image(evt.room_id, url=uri, file_name=filename, info=ImageInfo(mimetype='image/jpeg'))
+
+        if self.config["aparat.video"]:
+            try:
+                video_qualities = data['video']['file_link_all']
+
+                sorted_qualities = sorted(
+                    video_qualities,
+                    key=lambda x: int(x['profile'].replace('p', '')),
+                    reverse=True
+                )
+
+                best_quality = sorted_qualities[0]
+                video_url = best_quality['urls'][0]
+
+                self.log.info(f"Downloading Aparat video from {video_url}")
+
+                video_response = await self.http.get(video_url)
+                if video_response.status != 200:
+                    self.log.warning(f"Failed to download Aparat video: HTTP {video_response.status}")
+                    return
+
+                video_data = await video_response.read()
+                mime_type = 'video/mp4'
+                filename = f"{title}.mp4"
+
+                uri = await self.client.upload_media(video_data, mime_type=mime_type, filename=filename)
+                await self.client.send_file(
+                    evt.room_id,
+                    url=uri,
+                    info=BaseFileInfo(
+                        mimetype=mime_type,
+                        size=len(video_data)
+                    ),
+                    file_name=filename,
+                    file_type=MessageType.VIDEO
+                )
+                self.log.info(f"Successfully sent Aparat video {filename}")
+
+            except KeyError as e:
+                self.log.warning(f"Missing expected data in API response: {str(e)}")
+            except IndexError:
+                self.log.warning("No video URLs found in API response")
+            except Exception as e:
+                self.log.warning(f"Error handling Aparat video: {str(e)}")
