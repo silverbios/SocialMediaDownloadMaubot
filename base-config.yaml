@@ -22,4 +22,9 @@ bluesky:
   image: True
   video: True
   thumbnail: True
+aparat:
+    enabled: true
+    info: true
+    thumbnail: false
+    video: true
 respond_to_notice: False
