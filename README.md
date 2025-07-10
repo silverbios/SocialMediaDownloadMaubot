@@ -8,6 +8,7 @@ Currently supported social media platforms:
   - YouTube
   - TikTok
   - Bluesky
+  - Aparat
 
 Choose what to download by configuring the plugin.
 
